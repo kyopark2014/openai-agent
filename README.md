@@ -22,6 +22,14 @@ resp = client.responses.create(
 print(resp.output_text)
 ```
 
+키등록을 수행합니다.
+
+```baseh
+export AWS_BEARER_TOKEN_BEDROCK="YOUR_BEDROCK_API_KEY"
+```
+
+필요한 패키지를 설치합니다.
+
 ```bash
 pip install -U "openai>=2.40.0"
 pip install aws-bedrock-token-generator
