@@ -22,6 +22,9 @@ resp = client.responses.create(
 print(resp.output_text)
 ```
 
-
+```bash
+pip install -U "openai>=2.40.0"
+pip install aws-bedrock-token-generator
+```
 
 [OpenAI models in Amazon Bedrock](https://developers.openai.com/api/docs/guides/amazon-bedrock)
