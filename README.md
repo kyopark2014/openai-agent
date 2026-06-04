@@ -6,32 +6,65 @@
 
 [OpenAI Agents SDK - Python](https://github.com/openai/openai-agents-python)을 활용합니다.
 
+아래와 같이 Openai SDK를 설치합니다.
 
-## Hello Workd
-
-```python
-from openai import OpenAI 
-client = OpenAI(
-    base_url="https://bedrock-mantle.us-east-2.api.aws/openai/v1",
-    api_key=Bedrcok_API_Key,   
-)
-resp = client.responses.create(
-    model="openai.gpt-5.4",
-    input="Hello from Bedrock",
-)
-print(resp.output_text)
+```bash
+pip install -U "openai>=2.40.0"
 ```
 
-키등록을 수행합니다.
+
+## Hello World
+
+아래와 같이 Bedrock Key를 등록합니다.
 
 ```baseh
 export AWS_BEARER_TOKEN_BEDROCK="YOUR_BEDROCK_API_KEY"
 ```
 
-필요한 패키지를 설치합니다.
+이후 아래와 같이 결과를 확인할 수 있습니다.
+
+```python
+from openai import BedrockOpenAI
+
+client = BedrockOpenAI(aws_region="us-east-2")
+
+response = client.responses.create(
+    model="openai.gpt-5.5",
+    input="AWS에서 OpenAI API를 사용하는 방법을 설명해주세요.",
+)
+
+print(response.output_text)
+```
+
+## Streaming
+
+아래와 같이 stream형태로 결과를 보여줄 수 있습니다.
+
+```python
+from openai import BedrockOpenAI
+
+Bedrock_API_Key = "YOUR_BEDROCK_API_KEY"
+
+client = BedrockOpenAI(
+    aws_region="us-east-2",
+    api_key=Bedrock_API_Key,
+)
+
+stream = client.responses.create(
+    model="openai.gpt-5.5",
+    input="AWS에서 OpenAI API를 사용하는 방법을 설명해주세요.",
+    stream=True,
+)
+
+for event in stream:
+    if event.type == "response.output_text.delta":
+        print(event.delta, end="", flush=True)
+
+print()
+```
+
 
 ```bash
-pip install -U "openai>=2.40.0"
 pip install aws-bedrock-token-generator
 ```
 
