@@ -21,3 +21,7 @@ resp = client.responses.create(
 )
 print(resp.output_text)
 ```
+
+
+
+[OpenAI models in Amazon Bedrock](https://developers.openai.com/api/docs/guides/amazon-bedrock)
