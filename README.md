@@ -5,3 +5,19 @@
 ## OpenAI Agents SDK
 
 [OpenAI Agents SDK - Python](https://github.com/openai/openai-agents-python)을 활용합니다.
+
+
+## Hello Workd
+
+```python
+from openai import OpenAI 
+client = OpenAI(
+    base_url="https://bedrock-mantle.us-east-2.api.aws/openai/v1",
+    api_key=Bedrcok_API_Key,   
+)
+resp = client.responses.create(
+    model="openai.gpt-5.4",
+    input="Hello from Bedrock",
+)
+print(resp.output_text)
+```
