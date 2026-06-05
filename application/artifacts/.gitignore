@@ -1,0 +1,14 @@
+__pycache__
+
+*.doc
+*.docx
+*.pdf
+*.txt
+*.csv
+*.json
+*.xml
+*.html
+*.css
+*.js
+*.ts
+*.md

@@ -1,0 +1,3 @@
+openai>=2.41.0
+openai-agents>=0.17.0
+aws-bedrock-token-generator
