@@ -459,7 +459,7 @@ def _text_from_run_item(event: RunItemStreamEvent) -> str | None:
     return None
 
 
-async def _consume_stream(
+async def agent_stream(
     agent: Agent,
     query: str,
     queue: Any,
@@ -554,26 +554,6 @@ async def _consume_stream(
     return final_result, image_urls, references, current
 
 
-async def _run_with_mcp(
-    agent: Agent,
-    query: str,
-    queue: Any,
-    session: SQLiteSession,
-) -> tuple[str, list[str], list[dict], str]:
-    mcp_servers = list(agent.mcp_servers)
-
-    if not mcp_servers:
-        return await _consume_stream(agent, query, queue, session)
-
-    async with MCPServerManager(mcp_servers, drop_failed_servers=True, strict=False) as manager:
-        agent.mcp_servers = manager.active_servers
-        for server, err in manager.errors.items():
-            logger.warning("MCP server '%s' failed: %s", getattr(server, "name", server), err)
-        if not manager.active_servers:
-            raise RuntimeError("No MCP servers connected. Check MCP configuration and dependencies.")
-        return await _consume_stream(agent, query, queue, session)
-
-
 async def run_agent(
     query: str,
     optional_tool_names: list[str],
@@ -601,7 +581,17 @@ async def run_agent(
     if queue is not None:
         queue.reset()
 
-    final_result, image_urls, references, _ = await _run_with_mcp(_agent, query, queue, session)
+    mcp_servers = list(_agent.mcp_servers)
+    if mcp_servers:
+        async with MCPServerManager(mcp_servers, drop_failed_servers=True, strict=False) as manager:
+            _agent.mcp_servers = manager.active_servers
+            for server, err in manager.errors.items():
+                logger.warning("MCP server '%s' failed: %s", getattr(server, "name", server), err)
+            if not manager.active_servers:
+                raise RuntimeError("No MCP servers connected. Check MCP configuration and dependencies.")
+            final_result, image_urls, references, _ = await agent_stream(_agent, query, queue, session)
+    else:
+        final_result, image_urls, references, _ = await agent_stream(_agent, query, queue, session)
 
     if references:
         ref = "\n\n### Reference\n"
