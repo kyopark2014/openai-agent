@@ -1,31 +1,103 @@
-import os
-import yaml
-import logging
-import sys
-import utils
-import yaml
+"""OpenAI Agents SDK Skills pattern for local Agent runs.
 
+Follows the Skills capability model:
+https://openai.github.io/openai-agents-python/ref/sandbox/capabilities/skills/
+
+Skills are indexed by metadata only in the system prompt. The agent calls
+``load_skill`` to materialize a skill under ``.agents/<name>/``, then reads
+``SKILL.md`` and related files with ``file_read`` / ``bash``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import shutil
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
+
+import yaml
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(filename)s:%(lineno)d | %(message)s',
-    handlers=[logging.StreamHandler(sys.stderr)]
+    format="%(filename)s:%(lineno)d | %(message)s",
+    handlers=[logging.StreamHandler(sys.stderr)],
 )
 logger = logging.getLogger("skill")
 
 WORKING_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILLS_DIR = os.path.join(WORKING_DIR, "skills")
 ARTIFACTS_DIR = os.path.join(WORKING_DIR, "artifacts")
+SKILLS_WORKSPACE = ".agents"
 
-config = utils.load_config()
-sharing_url = config.get("sharing_url")
+config = None
 
-# ═══════════════════════════════════════════════════════════════════
-#  Skill Manager – implementation of Anthropic Agent Skills spec
-#     (https://agentskills.io/specification)
-# ═══════════════════════════════════════════════════════════════════
+
+def _load_config():
+    global config
+    if config is None:
+        import utils
+
+        config = utils.load_config()
+    return config
+
+
+_SKILLS_SECTION_INTRO = (
+    "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. "
+    "Below is the list of skills that can be used. Each entry includes a name, description, "
+    "and file path so you can open the source for full instructions when using a specific skill."
+)
+
+_HOW_TO_USE_LAZY_SKILLS_SECTION = "\n".join(
+    [
+        "### How to use skills",
+        "- Discovery: The list above is the skill index available in this session "
+        "(name + description + workspace path). In lazy mode, those paths are loaded "
+        "on demand instead of being present up front.",
+        "- Trigger rules: If the user names a skill (with `$SkillName` or plain text) "
+        "OR the task clearly matches a skill's description shown above, you must use that "
+        "skill for that turn. Multiple mentions mean use them all. Do not carry skills "
+        "across turns unless re-mentioned.",
+        "- Missing/blocked: If a named skill isn't in the list or the path can't be read, "
+        "say so briefly and continue with the best fallback.",
+        "- How to use a skill (progressive disclosure):",
+        "  1) After deciding to use a lazy skill, call `load_skill` for that skill first, "
+        "then open its `SKILL.md` with `file_read`.",
+        "  2) If `SKILL.md` points to extra folders such as `references/`, load only the "
+        "specific files needed for the request; don't bulk-load everything.",
+        "  3) If `scripts/` exist, prefer running or patching them instead of retyping "
+        "large code blocks.",
+        "  4) If `assets/` or templates exist, reuse them instead of recreating from scratch.",
+        "- Coordination and sequencing:",
+        "  - If multiple skills apply, choose the minimal set that covers the request "
+        "and state the order you'll use them.",
+        "  - Announce which skill(s) you're using and why (one short line). "
+        "If you skip an obvious skill, say why.",
+        "- Context hygiene:",
+        "  - Keep context small: summarize long sections instead of pasting them; "
+        "only load extra files when needed.",
+        "  - Avoid deep reference-chasing: prefer opening only files directly linked "
+        "from `SKILL.md` unless you're blocked.",
+        "  - When variants exist (frameworks, providers, domains), pick only the relevant "
+        "reference file(s) and note that choice.",
+        "- Safety and fallback: If a skill can't be applied cleanly (missing files, "
+        "unclear instructions), state the issue, pick the next-best approach, and continue.",
+    ]
+)
+
+
+@dataclass(frozen=True)
+class SkillMetadata:
+    """Indexed metadata for a skill (OpenAI Agents SDK SkillMetadata)."""
+
+    name: str
+    description: str
+    path: Path
+    source_dir: Path
+
 
 @dataclass
 class Skill:
@@ -34,62 +106,46 @@ class Skill:
     instructions: str
     path: str
 
+
 class SkillManager:
-    """Discovers, loads and selects Agent Skills following the Anthropic spec."""
+    """Discover skills from local directories (SKILL.md frontmatter)."""
 
     def __init__(self, skills_dir: str = SKILLS_DIR):
         self.skills_dir = skills_dir
         self.registry: dict[str, Skill] = {}
         self._discover(skills_dir)
 
-    # ---- discovery & metadata loading ----
-    def _discover(self, skills_dir: str):
-        """Scan a skills directory and load metadata (frontmatter only) into registry."""
+    def _discover(self, skills_dir: str) -> None:
         if not os.path.isdir(skills_dir):
             logger.info(f"skills directory is not found: {skills_dir}")
             return
 
         for entry in os.listdir(skills_dir):
             skill_md = os.path.join(skills_dir, entry, "SKILL.md")
-            if os.path.isfile(skill_md):
-                try:
-                    meta, instructions = self._parse_skill_md(skill_md)
-                    skill = Skill(
-                        name=meta.get("name", entry),
-                        description=meta.get("description", ""),
-                        instructions=instructions,
-                        path=os.path.join(skills_dir, entry),
-                    )
-                    self.registry[skill.name] = skill
-                    logger.info(f"Skill discovered: {skill.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to load skill '{entry}': {e}")
+            if not os.path.isfile(skill_md):
+                continue
+            try:
+                meta, instructions = self._parse_skill_md(skill_md)
+                skill_obj = Skill(
+                    name=meta.get("name", entry),
+                    description=meta.get("description", ""),
+                    instructions=instructions,
+                    path=os.path.join(skills_dir, entry),
+                )
+                self.registry[skill_obj.name] = skill_obj
+                logger.info(f"Skill discovered: {skill_obj.name}")
+            except Exception as exc:
+                logger.warning(f"Failed to load skill '{entry}': {exc}")
 
-    def discover_plugin_skills(self, skills_dir: str):
-        """Scan a plugin's skills directory and add to registry (merge, do not replace)."""
+    def discover_plugin_skills(self, skills_dir: str) -> None:
         if not os.path.isdir(skills_dir):
             return
-        for entry in os.listdir(skills_dir):
-            skill_md = os.path.join(skills_dir, entry, "SKILL.md")
-            if os.path.isfile(skill_md):
-                try:
-                    meta, instructions = self._parse_skill_md(skill_md)
-                    skill = Skill(
-                        name=meta.get("name", entry),
-                        description=meta.get("description", ""),
-                        instructions=instructions,
-                        path=os.path.join(skills_dir, entry),
-                    )
-                    self.registry[skill.name] = skill
-                    logger.info(f"Plugin skill discovered: {skill.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to load plugin skill '{entry}': {e}")
+        self._discover(skills_dir)
 
     @staticmethod
     def _parse_skill_md(filepath: str) -> tuple[dict, str]:
-        """Parse YAML frontmatter + markdown body from a SKILL.md file."""
-        with open(filepath, "r", encoding="utf-8") as f:
-            raw = f.read()
+        with open(filepath, "r", encoding="utf-8") as handle:
+            raw = handle.read()
 
         if not raw.startswith("---"):
             return {}, raw
@@ -102,161 +158,221 @@ class SkillManager:
         body = parts[2].strip()
         return frontmatter, body
 
-    def get_skill_instructions(self, name: str) -> Optional[str]:
-        """Return full instructions for a skill (loaded on demand)."""
-        skill = self.registry.get(name)
-        return skill.instructions if skill else None
+    def list_skill_metadata(self, skills_path: str = SKILLS_WORKSPACE) -> list[SkillMetadata]:
+        metadata: list[SkillMetadata] = []
+        for skill_obj in sorted(self.registry.values(), key=lambda item: item.name):
+            dir_name = os.path.basename(skill_obj.path.rstrip(os.sep))
+            metadata.append(
+                SkillMetadata(
+                    name=skill_obj.name,
+                    description=skill_obj.description or "No description provided.",
+                    path=Path(skills_path) / dir_name,
+                    source_dir=Path(skill_obj.path),
+                )
+            )
+        return metadata
 
-# define global skill_managers
+
 skill_managers: dict[str, SkillManager] = {}
 
-def get_skills_xml(skill_info: list) -> str:
-    lines = ["<available_skills>"]
-    for s in skill_info:
-        lines.append("  <skill>")
-        lines.append(f"    <name>{s['name']}</name>")
-        lines.append(f"    <description>{s['description']}</description>")
-        lines.append("  </skill>")
-    lines.append("</available_skills>")
-    return "\n".join(lines)
 
-def register_plugin_skills(plugin_name: str):
-    """Register skills from a plugin's skills directory into SkillManager's registry."""    
-    if plugin_name == "base": # base skills
-        skills_dir = SKILLS_DIR
-    else:   # plugin skills
-        skills_dir = os.path.join(WORKING_DIR, "plugins", plugin_name, "skills")
-    
-    skill_manager = skill_managers.get(plugin_name)
-    if skill_manager is None:
-        skill_manager = SkillManager(skills_dir)
-        skill_managers[plugin_name] = skill_manager
+def _get_skill_manager(plugin_name: str = "base") -> SkillManager:
+    manager = skill_managers.get(plugin_name)
+    if manager is not None:
+        return manager
 
-    skill_manager.discover_plugin_skills(skills_dir)
-
-
-def get_skill_info(skill_list: list) -> list:
-    skill_manager = skill_managers.get('base')
-    if skill_manager is None:
-        skill_manager = SkillManager(SKILLS_DIR)
-        skill_managers['base'] = skill_manager
-        skill_manager.discover_plugin_skills(SKILLS_DIR)
-
-    registry = skill_manager.registry
-    
-    if not registry:
-        return []
-    
-    skill_info = []
-    for s in registry.values():
-        if s.name in skill_list:
-            skill_info.append({"name": s.name, "description": s.description})
-        
-    return skill_info
-
-
-def get_plugin_skill_info(plugin_name: str, plugin_skill_list: list) -> list:
-    skill_manager = skill_managers.get(plugin_name)
-    if skill_manager is None:
-        skills_dir = os.path.join(WORKING_DIR, "plugins", plugin_name, "skills")
-        skill_manager = SkillManager(skills_dir)
-        skill_managers[plugin_name] = skill_manager
-        skill_manager.discover_plugin_skills(skills_dir)
-
-    registry = skill_manager.registry
-    plugin_skill_info = []
-    for s in registry.values():
-        if s.name in plugin_skill_list:
-            plugin_skill_info.append({"name": s.name, "description": s.description})
-    logger.info(f"plugin_skill_info: {plugin_skill_info}")
-
-    return plugin_skill_info
-
-
-def available_skill_info(plugin_name: str) -> list:
-    skill_manager = skill_managers.get(plugin_name)
-    if skill_manager is None:
-        if plugin_name == "base": # base skills
-            skills_dir = SKILLS_DIR
-        else:   # plugin skills
-            skills_dir = os.path.join(WORKING_DIR, "plugins", plugin_name, "skills")
-        skill_manager = SkillManager(skills_dir)
-        skill_managers[plugin_name] = skill_manager
-
-    registry = skill_manager.registry
-    
-    if not registry:
-        return []
-    
-    skill_info = []
-    for s in registry.values():
-        skill_info.append({"name": s.name, "description": s.description})
-        
-    return skill_info
-
-
-def selected_skill_info(plugin_name: str) -> list:
-    config = utils.load_config()
     if plugin_name == "base":
-        skill_list = config.get("default_skills") or []
-    else:   # plugin skills
-        skill_list = config.get("plugin_skills", {}).get(plugin_name) or []
+        skills_dir = SKILLS_DIR
+    else:
+        skills_dir = os.path.join(WORKING_DIR, "plugins", plugin_name, "skills")
+
+    manager = SkillManager(skills_dir)
+    skill_managers[plugin_name] = manager
+    return manager
+
+
+def register_plugin_skills(plugin_name: str) -> None:
+    if plugin_name == "base":
+        skills_dir = SKILLS_DIR
+    else:
+        skills_dir = os.path.join(WORKING_DIR, "plugins", plugin_name, "skills")
+
+    manager = skill_managers.get(plugin_name)
+    if manager is None:
+        manager = SkillManager(skills_dir)
+        skill_managers[plugin_name] = manager
+    else:
+        manager.discover_plugin_skills(skills_dir)
+
+
+def available_skill_info(plugin_name: str = "base") -> list[dict[str, str]]:
+    manager = _get_skill_manager(plugin_name)
+    return [{"name": item.name, "description": item.description} for item in manager.registry.values()]
+
+
+def get_skill_info(skill_list: list[str]) -> list[dict[str, str]]:
+    manager = _get_skill_manager("base")
+    selected = []
+    for item in manager.registry.values():
+        if item.name in skill_list:
+            selected.append({"name": item.name, "description": item.description})
+    return selected
+
+
+def get_plugin_skill_info(plugin_name: str, plugin_skill_list: list[str]) -> list[dict[str, str]]:
+    manager = _get_skill_manager(plugin_name)
+    selected = []
+    for item in manager.registry.values():
+        if item.name in plugin_skill_list:
+            selected.append({"name": item.name, "description": item.description})
+    logger.info(f"plugin_skill_info: {selected}")
+    return selected
+
+
+def selected_skill_info(plugin_name: str) -> list[dict[str, str]]:
+    cfg = _load_config()
+    if plugin_name == "base":
+        skill_list = cfg.get("default_skills") or []
+    else:
+        skill_list = cfg.get("plugin_skills", {}).get(plugin_name) or []
     logger.info(f"plugin_name: {plugin_name}, skill_list: {skill_list}")
 
-    skill_info = available_skill_info(plugin_name)
-
-    selected_skill_info = []
-    for s in skill_info:
-        if s["name"] in skill_list:
-            selected_skill_info.append(s)
-    return selected_skill_info
+    return [item for item in available_skill_info(plugin_name) if item["name"] in skill_list]
 
 
-SKILL_SYSTEM_PROMPT = (
+def get_selected_skill_metadata(skill_list: list[str]) -> list[SkillMetadata]:
+    """Return OpenAI-style metadata for UI-selected skills."""
+    all_metadata = _get_skill_manager("base").list_skill_metadata()
+    if not skill_list:
+        return all_metadata
+    allowed = set(skill_list)
+    return [item for item in all_metadata if item.name in allowed]
+
+
+def _find_skill_metadata(skill_name: str) -> SkillMetadata | None:
+    normalized = skill_name.strip()
+    for item in _get_skill_manager("base").list_skill_metadata():
+        if item.name == normalized or item.path.name == normalized:
+            return item
+    return None
+
+
+def load_skill(skill_name: str) -> dict[str, str]:
+    """Materialize one skill under ``.agents/<name>/`` (lazy loading)."""
+    logger.info(f"load_skill: {skill_name}")
+    metadata = _find_skill_metadata(skill_name)
+    if metadata is None:
+        available = ", ".join(item.name for item in _get_skill_manager("base").list_skill_metadata())
+        return {
+            "status": "error",
+            "skill_name": skill_name,
+            "message": f"Skill '{skill_name}' not found. Available skills: {available}",
+        }
+
+    workspace_root = Path(WORKING_DIR)
+    skill_dest = workspace_root / metadata.path
+    skill_md = skill_dest / "SKILL.md"
+
+    if skill_md.is_file():
+        return {
+            "status": "already_loaded",
+            "skill_name": metadata.name,
+            "path": metadata.path.as_posix(),
+        }
+
+    if not metadata.source_dir.is_dir():
+        return {
+            "status": "error",
+            "skill_name": metadata.name,
+            "message": f"Skill source directory not found: {metadata.source_dir}",
+        }
+
+    skill_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(metadata.source_dir, skill_dest, dirs_exist_ok=True)
+    logger.info(f"Skill loaded: {metadata.name} -> {skill_dest}")
+
+    return {
+        "status": "loaded",
+        "skill_name": metadata.name,
+        "path": metadata.path.as_posix(),
+    }
+
+
+def build_path_info() -> str:
+    return (
+        f"## Paths\n"
+        f"- WORKING_DIR: {WORKING_DIR}\n"
+        f"- ARTIFACTS_DIR: {ARTIFACTS_DIR}\n"
+        f"- SKILLS_WORKSPACE: {os.path.join(WORKING_DIR, SKILLS_WORKSPACE)}\n"
+        f"Example: file_read(path='{SKILLS_WORKSPACE}/docx/SKILL.md')\n"
+    )
+
+
+def build_skills_instructions(
+    metadata: list[SkillMetadata],
+    *,
+    lazy: bool = True,
+) -> str | None:
+    """Build the OpenAI Skills instructions block for the agent system prompt."""
+    if not metadata:
+        return None
+
+    available_lines = [
+        f"- {item.name}: {item.description} (file: {item.path.as_posix()})"
+        for item in metadata
+    ]
+
+    sections = [
+        "## Skills",
+        _SKILLS_SECTION_INTRO,
+        "### Available skills",
+        *available_lines,
+    ]
+
+    if lazy:
+        sections.extend(
+            [
+                "### Lazy loading",
+                "- These skills are indexed for planning, but they are not materialized "
+                "in the workspace yet.",
+                "- Call `load_skill` with a single skill name from the list before "
+                "reading its `SKILL.md` or other files from the workspace.",
+                "- `load_skill` stages exactly one skill under the listed path. "
+                "If you need more than one skill, call it multiple times.",
+            ]
+        )
+
+    sections.append(_HOW_TO_USE_LAZY_SKILLS_SECTION if lazy else _HOW_TO_USE_LAZY_SKILLS_SECTION)
+    return "\n".join(sections)
+
+
+AGENT_BASE_PROMPT = (
     "당신의 이름은 서연이고, 질문에 친근한 방식으로 대답하도록 설계된 대화형 AI입니다.\n"
     "상황에 맞는 구체적인 세부 정보를 충분히 제공합니다.\n"
     "모르는 질문을 받으면 솔직히 모른다고 말합니다.\n"
     "한국어로 답변하세요.\n\n"
     "## Agent Workflow\n"
     "1. 사용자 입력을 받는다\n"
-    "2. 요청에 맞는 skill이 있으면 get_skill_instructions 도구로 상세 지침을 로드한다\n"
-    "3. skill 지침에 따라 execute_code, write_file 등의 도구를 사용하여 작업을 수행한다\n"
+    "2. 요청에 맞는 skill이 있으면 `load_skill`로 워크스페이스에 로드한 뒤 `file_read`로 SKILL.md를 연다\n"
+    "3. skill 지침에 따라 execute_code, file_write, bash 등의 도구로 작업을 수행한다\n"
+    "   (생성 파일·스크립트는 `artifacts/` 아래에 저장한다)\n"
     "4. 결과 파일이 있으면 upload_file_to_s3로 업로드하여 URL을 제공한다\n"
-    "5. 최종 결과를 사용자에게 전달한다\n\n"
+    "5. 최종 결과를 사용자에게 전달한다\n"
 )
 
-SKILL_USAGE_GUIDE = (
-    "\n## Skill 사용 가이드\n"
-    "위의 <available_skills>에 나열된 skill이 사용자의 요청과 관련될 때:\n"
-    "1. 먼저 get_skill_instructions 도구로 해당 skill의 상세 지침을 로드하세요.\n"
-    "2. **중요: 지침을 읽기 전에 어떤 작업을 할지 단정짓지 마세요.** "
-    "skill의 description에 서브커맨드(query, path, explain 등)가 있다면, "
-    "사용자 명령의 서브커맨드를 정확히 파악한 후 그에 맞는 동작을 설명하세요.\n"
-    "3. 지침에 포함된 코드 패턴을 execute_code 도구로 실행하세요.\n"
-    "4. skill 지침이 없는 일반 질문은 직접 답변하세요.\n"
-)
 
-def build_skill_prompt(skill_info: list) -> str:
-    """Build skill-related prompt: path info, available skills XML, and usage guide."""
-        
-    path_info = (
-        f"## Paths (use absolute paths for write_file, read_file)\n"
-        f"- WORKING_DIR: {WORKING_DIR}\n"
-        f"- ARTIFACTS_DIR: {ARTIFACTS_DIR}\n"
-        f"Example: write_file(filepath='{os.path.join(ARTIFACTS_DIR, 'report.drawio')}', content='...')\n\n"
-    )
+def build_agent_instructions(selected_skills: list[str]) -> str:
+    """Assemble the full agent system prompt with OpenAI Skills metadata."""
+    metadata = get_selected_skill_metadata(selected_skills)
+    skills_block = build_skills_instructions(metadata, lazy=True)
+    parts = [AGENT_BASE_PROMPT, build_path_info()]
+    if skills_block:
+        parts.append(skills_block)
+    return "\n\n".join(parts)
 
-    skills_xml = get_skills_xml(skill_info)
-    if skills_xml:
-        return f"{SKILL_SYSTEM_PROMPT}\n{path_info}\n{skills_xml}\n{SKILL_USAGE_GUIDE}"
-    return f"{SKILL_SYSTEM_PROMPT}\n{path_info}"
 
 def get_command_instructions(plugin_name: str, command_name: str) -> str:
-    """Load the full instructions for a specific command by name.
-
-    Use this when you need detailed instructions for a command.
-    """
-    logger.info(f"###### get_command_instructions: {command_name} ######")
+    logger.info(f"get_command_instructions: {command_name}")
 
     commands_dir = os.path.join(WORKING_DIR, "plugins", plugin_name, "commands")
     if not os.path.isdir(commands_dir):
@@ -266,14 +382,10 @@ def get_command_instructions(plugin_name: str, command_name: str) -> str:
     filepath = os.path.join(commands_dir, f"{command_name_normalized}.md")
 
     if not os.path.isfile(filepath):
-        available = [
-            p[:-3] for p in os.listdir(commands_dir)
-            if p.endswith(".md")
-        ]
+        available = [name[:-3] for name in os.listdir(commands_dir) if name.endswith(".md")]
         return f"Command '{command_name}' not found. Available commands: {', '.join(available)}"
 
     frontmatter, body = SkillManager._parse_skill_md(filepath)
-    # Return body (instructions); optionally prefix with frontmatter summary
     if frontmatter:
         desc = frontmatter.get("description", "")
         hint = frontmatter.get("argument-hint", "")
@@ -283,78 +395,11 @@ def get_command_instructions(plugin_name: str, command_name: str) -> str:
         return header + body
     return body
 
-COMMAND_USAGE_GUIDE = (
-    "\n## Command 사용 가이드\n"
-    "위의 <command_instructions>에 따라 사용자 요청을 처리하세요.\n"
-    "필요한 경우 get_skill_instructions로 skill 지침을 추가 로드하거나, execute_code, write_file 등 도구를 사용하세요.\n"
-)
 
-
-def build_command_prompt(plugin_name: str, skill_info: list, command: str) -> str:
-    """Build prompt for command mode: path info, command instructions, and available skills."""
-
-    path_info = (
-        f"## Paths (use absolute paths for write_file, read_file)\n"
-        f"- WORKING_DIR: {WORKING_DIR}\n"
-        f"- ARTIFACTS_DIR: {ARTIFACTS_DIR}\n"
-        f"Example: write_file(filepath='{os.path.join(ARTIFACTS_DIR, 'report.drawio')}', content='...')\n\n"
-    )
-
+def build_command_prompt(plugin_name: str, skill_list: list[str], command: str) -> str:
     command_instructions = get_command_instructions(plugin_name, command)
-    command_section = f"## Command Instructions\n<command_instructions>\n{command_instructions}\n</command_instructions>\n\n"
-
-    skills_xml = get_skills_xml(skill_info)
-    skills_section = f"{skills_xml}\n" if skills_xml else ""
-
-    return f"{SKILL_SYSTEM_PROMPT}\n{path_info}\n{command_section}\n{skills_section}\n{COMMAND_USAGE_GUIDE}"
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  2. Skill Tools – get_skill_instructions
-# ═══════════════════════════════════════════════════════════════════
-
-def get_skill_instructions(plugin_name: str, skill_name: str) -> str:
-    """Load the full instructions for a specific skill by name.
-
-    Use this when you need detailed instructions for a task that matches
-    one of the available skills listed in the system prompt.
-
-    Args:
-        skill_name: The name of the skill to load (e.g. 'pdf').
-
-    Returns:
-        The full skill instructions, or an error message if not found.
-    """    
-    logger.info(f"###### get_skill_instructions: {skill_name} ######")
-    skill_manager = skill_managers.get(plugin_name)
-    if skill_manager is None:
-        if plugin_name == "base": # base skills
-            skills_dir = SKILLS_DIR
-        else:   # plugin skills
-            skills_dir = os.path.join(WORKING_DIR, "plugins", plugin_name, "skills")
-        skill_manager = SkillManager(skills_dir)
-        skill_managers[plugin_name] = skill_manager
-        skill_manager.discover_plugin_skills(skills_dir)
-
-    instructions = skill_manager.get_skill_instructions(skill_name)
-    if instructions:
-        return instructions
-
-    # fallback to base skills
-    skill_manager = skill_managers.get("base")
-    if skill_manager is None:
-        skills_dir = SKILLS_DIR
-        skill_manager = SkillManager(skills_dir)
-        skill_managers["base"] = skill_manager
-    instructions = skill_manager.get_skill_instructions(skill_name)
-    if instructions:
-        return instructions
-
-    available = ", ".join(skill_manager.registry.keys())
-    return f"Skill '{skill_name}' not found. Available skills: {available}"
-
-
-def get_skill_tools():
-    """Return the list of skill tools for the skill-aware agent."""
-    return [get_skill_instructions]
-
+    command_section = (
+        f"## Command Instructions\n<command_instructions>\n{command_instructions}\n</command_instructions>\n"
+    )
+    skills_prompt = build_agent_instructions(skill_list)
+    return f"{skills_prompt}\n\n{command_section}"

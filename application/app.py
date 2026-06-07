@@ -25,6 +25,9 @@ logger = logging.getLogger("streamlit")
 
 config = utils.load_config()
 
+# Reset agent conversation DB once when the Streamlit server starts
+openai_agent.reset_conversations_db_at_startup()
+
 # title
 st.set_page_config(page_title='Agent', page_icon=None, layout="centered", initial_sidebar_state="auto", menu_items=None)
 
@@ -294,7 +297,7 @@ if clear_button or "messages" not in st.session_state:
     st.session_state.greetings = False
     
     chat.clear_chat_history()
-    asyncio.run(openai_agent.clear_conversations_session())
+    asyncio.run(openai_agent.clear_agent_session())
     st.rerun()
 
 file_name = ""
