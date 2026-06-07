@@ -88,8 +88,8 @@ flowchart TB
    - `execute_code` — Python 실행, `artifacts/` 산출물 추적
    - `bash` — 셸 명령
    - `upload_file_to_s3` — S3 업로드
-   - `get_skill_instructions` — Skill 지침 로드
-   - `builtin_current_time` / `builtin_file_read` / `builtin_file_write` — UI에서 선택
+   - `load_skill` — Skill을 `.agents/<name>/`에 lazy load
+   - `current_time` / `file_read` / `file_write` — UI에서 선택
 4. **MCP** — `MCPServerManager`로 stdio/HTTP 서버 `connect()` 후 도구 노출
 5. **실행** — `Runner.run_streamed()` → `NotificationQueue`로 UI 스트리밍
 
@@ -105,9 +105,72 @@ agent = Agent(
 result = Runner.run_streamed(agent, user_query, max_turns=20)
 ```
 
-### Agent Skills
+## SKILL
 
-`application/skills/` 아래 `SKILL.md`(YAML frontmatter)를 스캔합니다. Skill Mode가 켜지면 시스템 프롬프트에 skill 메타가 포함되고, Agent가 `get_skill_instructions`로 상세 지침을 로드한 뒤 `execute_code` 등으로 작업합니다.
+Agent Mode에서 문서·코드 등 **도메인별 작업 지침**을 붙이기 위해 [Agent Skills](https://openai.github.io/openai-agents-python/ref/sandbox/capabilities/skills/) 패턴을 사용합니다. 이 프로젝트는 `application/skill.py`와 `application/skills/`로 구현합니다.
+
+참고 문서:
+
+- [Skills capability (SDK reference)](https://openai.github.io/openai-agents-python/ref/sandbox/capabilities/skills/#agents.sandbox.capabilities.skills.Skill)
+- [Skills capability model](https://openai.github.io/openai-agents-python/ref/sandbox/capabilities/skills/)
+
+### SDK `Skill` vs `application/skill.py`
+
+| 항목 | SDK 공식 `Skill` / `Skills` | 이 프로젝트 `skill.py` |
+|------|------------------------------|------------------------|
+| 패키지 위치 | `agents.sandbox.capabilities.skills` | `application/skill.py` |
+| Agent 타입 | **`SandboxAgent`** 전용 | 일반 **`Agent`** + `Runner.run_streamed` |
+| 실행 환경 | `RunConfig(sandbox=...)` + sandbox session | Bedrock + 호스트 파일시스템 |
+| lazy load | `LocalDirLazySkillSource` + capability 내장 `load_skill` | `load_skill` → `skills/` → `.agents/<name>/` 복사 |
+| 파일 접근 | sandbox workspace (`session.read` 등) | `file_read`, `bash`, `execute_code` |
+
+**결론:** SDK 문서의 `Skill`은 **SandboxAgent용 capability**입니다. 현재 앱은 Sandbox 없이 **일반 Agent + Bedrock + Streamlit**으로 동작하므로, **`skill.py`는 중복이 아니라 Sandbox 없이 Skills 패턴을 구현하는 어댑터**입니다. SandboxAgent로 전환하지 않는 한 `skill.py`를 유지합니다.
+
+### 디렉터리 구조
+
+```
+application/
+├── skill.py              # 메타 스캔, 프롬프트 빌드, lazy load
+├── skills/               # Skill 소스 (각 하위 폴더에 SKILL.md)
+│   ├── docx/
+│   ├── pptx/
+│   └── ...
+└── .agents/              # 런타임 lazy-load 워크스페이스 (gitignore)
+    └── docx/             # load_skill 호출 시 materialize
+```
+
+### `skill.py` 역할
+
+| 기능 | 설명 |
+|------|------|
+| `skills/` 스캔 | `SKILL.md` YAML frontmatter에서 name·description 추출 |
+| Streamlit UI | `available_skill_info()` — 사이드바 Skill 체크박스 |
+| 시스템 프롬프트 | `build_agent_instructions()` — skill index + lazy 사용법 |
+| lazy materialize | `load_skill()` — `skills/<name>/` → `.agents/<name>/` 복사 |
+
+### Agent 실행 흐름
+
+1. Skill Mode가 켜지면 `create_agent()`가 `build_agent_instructions(selected_skills)`로 instructions 생성
+2. Agent가 `@function_tool load_skill` 호출 → `skill.load_skill()` 실행
+3. Agent가 `file_read(path='.agents/docx/SKILL.md')` 등으로 지침을 읽고 `bash` / `execute_code` / `file_write`로 작업
+4. 생성 파일은 `artifacts/` 아래에 저장 (`file_write`가 자동 라우팅)
+
+```python
+# openai_agent.py (개념)
+instructions = skill.build_agent_instructions(skill_list)
+tools = [execute_code, bash, upload_file_to_s3, load_skill, file_read, file_write, ...]
+agent = Agent(name="서연", instructions=instructions, tools=tools, ...)
+```
+
+### SandboxAgent로 전환할 경우
+
+SDK `Skills` capability를 쓰려면 아래가 필요합니다.
+
+- `Agent` → **`SandboxAgent`**
+- **`RunConfig(sandbox=SandboxRunConfig(...))`**
+- `Skills(lazy_from=LocalDirLazySkillSource(...))` 등 capability 설정
+
+이 경우 `skill.py`의 lazy load·프롬프트 빌드 대부분을 SDK에 위임할 수 있지만, Bedrock·MCP·Streamlit UI 연동은 별도 재설계가 필요합니다.
 
 ### 지원 모델
 

@@ -9,3 +9,5 @@ config.json
 
 # OpenAI Skills workspace (lazy-loaded copies)
 .agents/
+
+.conversations/
