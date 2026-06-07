@@ -10,6 +10,7 @@ AWS [Amazon Bedrock](https://developers.openai.com/api/docs/guides/amazon-bedroc
 - **Runner** — Agent 실행·스트리밍·멀티턴(tool → LLM 반복)
 - **function_tool** — Python 함수를 LLM이 호출할 수 있는 도구로 등록
 - **MCP** — Model Context Protocol 서버(stdio/HTTP) 도구 연동
+- **Skills** — `skills/*/SKILL.md` 도메인 지침을 lazy load (`load_skill` → `.agents/`)
 - **Handoff / Guardrails** — (필요 시) 전문 Agent 위임·입출력 검증
 
 이 프로젝트에서는 Agents SDK를 **Amazon Bedrock OpenAI 엔드포인트**와 연결합니다. `AsyncBedrockOpenAI` + `set_default_openai_client()`로 SDK가 Bedrock Responses API를 사용하도록 구성합니다.
@@ -30,10 +31,18 @@ flowchart TB
     M2[RAG]
     M3[Agent]
     M4[이미지 분석]
+    SKUI[Skill 선택 / Skill Mode]
   end
 
   subgraph LLM["Bedrock OpenAI Responses API"]
     BR[BedrockOpenAI / AsyncBedrockOpenAI]
+  end
+
+  subgraph Skills["Agent Skills (skill.py)"]
+    SRC["skills/*/SKILL.md"]
+    WS[".agents/ workspace"]
+    BI[build_agent_instructions]
+    LS[load_skill]
   end
 
   subgraph AgentStack["OpenAI Agents SDK (openai_agent.py)"]
@@ -47,12 +56,18 @@ flowchart TB
   M2 --> chat
   M4 --> chat
   M3 --> openai_agent
+  SKUI -->|skill_list| BI
 
   chat --> bedrock_responses --> BR
   openai_agent --> A
+  openai_agent --> BI
+  BI -->|instructions| A
   A --> R
   A --> FT
   A --> MCP
+  FT --> LS
+  LS --> SRC
+  LS --> WS
   R --> BR
 ```
 
