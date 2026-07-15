@@ -8,6 +8,64 @@ openai_gpt_5_5_models = [
     },
 ]
 
+openai_gpt_5_6_sol_models = [   # GPT-5.6 Sol
+    {
+        "bedrock_region": "us-east-1", # N.Virginia
+        "model_type": "openai",
+        "model_id": "openai.gpt-5.6-sol",
+        "mantle_api": "responses",
+    },
+    {
+        "bedrock_region": "us-east-2", # Ohio
+        "model_type": "openai",
+        "model_id": "openai.gpt-5.6-sol",
+        "mantle_api": "responses",
+    },
+]
+
+openai_gpt_5_6_terra_models = [   # GPT-5.6 Terra
+    {
+        "bedrock_region": "us-west-2", # Oregon
+        "model_type": "openai",
+        "model_id": "openai.gpt-5.6-terra",
+        "mantle_api": "responses",
+    },
+    {
+        "bedrock_region": "us-east-1", # N.Virginia
+        "model_type": "openai",
+        "model_id": "openai.gpt-5.6-terra",
+        "mantle_api": "responses",
+    },
+    {
+        "bedrock_region": "us-east-2", # Ohio
+        "model_type": "openai",
+        "model_id": "openai.gpt-5.6-terra",
+        "mantle_api": "responses",
+    },
+]
+
+openai_gpt_5_6_luna_models = [   # GPT-5.6 Luna
+    {
+        "bedrock_region": "us-west-2", # Oregon
+        "model_type": "openai",
+        "model_id": "openai.gpt-5.6-luna",
+        "mantle_api": "responses",
+    },
+    {
+        "bedrock_region": "us-east-1", # N.Virginia
+        "model_type": "openai",
+        "model_id": "openai.gpt-5.6-luna",
+        "mantle_api": "responses",
+    },
+    {
+        "bedrock_region": "us-east-2", # Ohio
+        "model_type": "openai",
+        "model_id": "openai.gpt-5.6-luna",
+        "mantle_api": "responses",
+    },
+]
+
+
 openai_oss_120b_models = [
     {
         "bedrock_region": "us-west-2",
@@ -28,6 +86,12 @@ openai_oss_20b_models = [
 def get_model_info(model_name: str) -> list[dict]:
     if model_name == "OpenAI GPT 5.5":
         return openai_gpt_5_5_models
+    if model_name == "OpenAI GPT 5.6 Sol":
+        return openai_gpt_5_6_sol_models
+    if model_name == "OpenAI GPT 5.6 Terra":
+        return openai_gpt_5_6_terra_models
+    if model_name == "OpenAI GPT 5.6 Luna":
+        return openai_gpt_5_6_luna_models
     if model_name == "OpenAI OSS 120B":
         return openai_oss_120b_models
     if model_name == "OpenAI OSS 20B":
