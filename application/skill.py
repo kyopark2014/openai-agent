@@ -230,10 +230,12 @@ def get_plugin_skill_info(plugin_name: str, plugin_skill_list: list[str]) -> lis
 
 
 def selected_skill_info(plugin_name: str) -> list[dict[str, str]]:
-    cfg = _load_config()
+    import utils
+
     if plugin_name == "base":
-        skill_list = cfg.get("default_skills") or []
+        skill_list, _ = utils.get_initial_tool_defaults()
     else:
+        cfg = _load_config()
         skill_list = cfg.get("plugin_skills", {}).get(plugin_name) or []
     logger.info(f"plugin_name: {plugin_name}, skill_list: {skill_list}")
 

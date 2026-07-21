@@ -81,8 +81,6 @@ with st.sidebar:
     ]
 
     mcp_selections = {}
-    default_mcp_selections = ["korea_weather", "web_fetch", "tavily"]
-
     default_agent_tool_selections = (
         config.get("default_agent_tool_selections")
         or config.get("default_strands_tool_selections")
@@ -97,7 +95,7 @@ with st.sidebar:
         st.subheader("⚙️ Skill Config")
 
         skill_selections = {}
-        default_skill_selections = config.get("default_skills") or ["skill-creator"]
+        default_skill_selections, default_mcp_selections = utils.get_initial_tool_defaults()
         logger.info(f"default_skill_selections: {default_skill_selections}")
         with st.expander("Skill 옵션 선택", expanded=True):
             available_skill_info = skill.available_skill_info("base")
@@ -107,11 +105,6 @@ with st.sidebar:
     
         selected_skills = [name for name, is_selected in skill_selections.items() if is_selected]
         logger.info(f"selected_skills: {selected_skills}")
-
-        if selected_skills != config.get("default_skills"):
-            config["default_skills"] = selected_skills
-            with open(utils.config_path, "w", encoding="utf-8") as f:
-                json.dump(config, f, ensure_ascii=False, indent=4)
 
         # Built-in tool selection
         st.subheader("⚙️ Agent Tool Config")
@@ -183,6 +176,12 @@ with st.sidebar:
             logger.info("save to user_defined_mcp.json")
         
         mcp_servers = [server for server, is_selected in mcp_selections.items() if is_selected]
+        if (
+            selected_skills != default_skill_selections
+            or mcp_servers != default_mcp_selections
+        ):
+            utils.save_favorite_tools(skills=selected_skills, mcp_servers=mcp_servers)
+
 
     else:
         mcp_servers = []
