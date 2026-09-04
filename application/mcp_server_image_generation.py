@@ -3,7 +3,7 @@ import sys
 import mcp_nova_canvas as canvas
 
 from typing import Dict, Optional, Any
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 from pydantic import Field
 from typing import TYPE_CHECKING, List, Optional
 
@@ -17,7 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger("nova-canvas-server")
 
 try:
-    mcp = FastMCP(
+    mcp = MCPServer(
         name = "nova_canvas",
         instructions=(
             "You are a helpful assistant. "
