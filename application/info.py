@@ -101,6 +101,8 @@ openai_oss_20b_models = [
 def get_model_info(model_name: str) -> list[dict]:
     if model_name == "OpenAI GPT 5.5":
         return openai_gpt_5_5_models
+    if model_name == "OpenAI GPT 6 Astra":
+        return openai_gpt_6_astra_models
     if model_name == "OpenAI GPT 5.6 Sol":
         return openai_gpt_5_6_sol_models
     if model_name == "OpenAI GPT 5.6 Terra":
