@@ -194,6 +194,8 @@ with st.sidebar:
         (
             "OpenAI GPT 5.5",
             "OpenAI GPT 6 Astra",
+            "OpenAI GPT 6 Sol",
+            "OpenAI GPT 6 Luna",
             "OpenAI GPT 5.6 Sol",
             "OpenAI GPT 5.6 Terra",
             "OpenAI GPT 5.6 Luna",
